@@ -29,6 +29,12 @@
 
 static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
 
+#define NUM_PROG_NAMES 2
+const char *prog_names[] = {
+	"xdp_fwd_prog",
+	"xdp_fwd_direct_", /* name truncated to BPF_OBJ_NAME_LEN */
+};
+
 static int do_attach(int idx, int prog_fd, int map_fd, const char *name)
 {
 	int err;
@@ -51,9 +57,9 @@ static int do_detach(int ifindex, const char *ifname, const char *app_name)
 {
 	LIBBPF_OPTS(bpf_xdp_attach_opts, opts);
 	struct bpf_prog_info prog_info = {};
-	char prog_name[BPF_OBJ_NAME_LEN];
 	__u32 info_len, curr_prog_id;
-	int prog_fd;
+	bool found_prog = false;
+	int prog_fd, i;
 	int err = 1;
 
 	if (bpf_xdp_query_id(ifindex, xdp_flags, &curr_prog_id)) {
@@ -82,10 +88,12 @@ static int do_detach(int ifindex, const char *ifname, const char *app_name)
 		       strerror(errno));
 		goto close_out;
 	}
-	snprintf(prog_name, sizeof(prog_name), "%s_prog", app_name);
-	prog_name[BPF_OBJ_NAME_LEN - 1] = '\0';
 
-	if (strcmp(prog_info.name, prog_name)) {
+	for (i = 0; i < NUM_PROG_NAMES; i++)
+		if (!strcmp(prog_info.name, prog_names[i]))
+			found_prog = true;
+
+	if (!found_prog) {
 		printf("ERROR: %s isn't attached to %s\n", app_name, ifname);
 		err = 1;
 		goto close_out;
