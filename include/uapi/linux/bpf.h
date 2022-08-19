@@ -911,6 +911,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_BLOOM_FILTER,
 	BPF_MAP_TYPE_PIFO_GENERIC,
 	BPF_MAP_TYPE_PIFO_XDP,
+	BPF_MAP_TYPE_PIFO_XDP_RB,
 };
 
 /* Note that tracing related programs such as
