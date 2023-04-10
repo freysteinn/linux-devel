@@ -174,19 +174,7 @@ static __always_inline int xdp_fwd_flags(struct xdp_md *ctx, u32 flags, bool que
 }
 
 SEC("xdp")
-int xdp_fwd_prog(struct xdp_md *ctx)
-{
-	return xdp_fwd_flags(ctx, 0, false);
-}
-
-SEC("xdp")
-int xdp_fwd_direct_prog(struct xdp_md *ctx)
-{
-	return xdp_fwd_flags(ctx, BPF_FIB_LOOKUP_DIRECT, false);
-}
-
-SEC("xdp")
-int xdp_fwd_queue(struct xdp_md *ctx)
+int xdp_fifo(struct xdp_md *ctx)
 {
 	return xdp_fwd_flags(ctx, 0, true);
 }
