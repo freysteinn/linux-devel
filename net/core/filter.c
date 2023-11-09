@@ -4245,6 +4245,7 @@ static __always_inline int __xdp_do_redirect_frame(struct bpf_redirect_info *ri,
 			err = pifo_map_enqueue(map, xdpf, ri->tgt_index);
 		break;
 	case BPF_MAP_TYPE_PIFO_XDP_RB:
+		map = READ_ONCE(ri->map);
 		err = map ? pifo_rb_map_enqueue(map, xdpf, ri->tgt_index) : -EINVAL;
 		break;
 	case BPF_MAP_TYPE_CPUMAP:
