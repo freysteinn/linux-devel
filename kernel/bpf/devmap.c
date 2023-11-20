@@ -458,6 +458,7 @@ void dev_run_xdp_dequeue(struct xdp_dequeue *deq)
 		bool ret = true;
 
 		local_bh_disable();
+		deq->next = NULL;
 
 		prog = rcu_dereference(bq->dev->xdp_dequeue_prog);
 		if (likely(prog)) {
@@ -481,7 +482,6 @@ void dev_run_xdp_dequeue(struct xdp_dequeue *deq)
 				netif_tx_schedule_xdp(deq);
 		}
 
-		deq->next = NULL;
 		deq = nxt;
 
 		local_bh_enable();

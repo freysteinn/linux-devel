@@ -383,7 +383,7 @@ static int __pifo_map_enqueue(struct bpf_pifo_map *pifo, union bpf_pifo_item *it
 	return 0;
 }
 
-int pifo_map_enqueue(struct bpf_map *map, struct xdp_frame *xdpf, u32 index)
+int pifo_map_enqueue(struct bpf_map *map, struct xdp_frame *xdpf, u64 index)
 {
 	struct bpf_pifo_map *pifo = container_of(map, struct bpf_pifo_map, map);
 	int ret;
