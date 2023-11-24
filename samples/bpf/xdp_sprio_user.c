@@ -32,10 +32,11 @@ static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
+#define XDP_NAME "xdp_sprio_prog"
+#define DEQUEUE_NAME "xdp_dequeue"
+
 const char *redir_prog_names[] = {
-	"xdp_fwd_prog",
-	"xdp_fwd_direct_", /* name truncated to BPF_OBJ_NAME_LEN */
-	"xdp_fwd_queue",
+	"xdp_sprio_prog"
 };
 
 const char *dequeue_prog_names[] = {
@@ -56,7 +57,7 @@ static int do_attach(int idx, int redir_prog_fd, int dequeue_prog_fd,
 		map_name[BPF_OBJ_NAME_LEN-1] = '\0';
 
 		pifo_fd = bpf_map_create(BPF_MAP_TYPE_PIFO_XDP, map_name,
-					 sizeof(__u32), sizeof(__u32), 1000, &map_opts);
+					 sizeof(__u32), sizeof(__u32), 10240, &map_opts);
 		if (pifo_fd < 0) {
 			err = -errno;
 			printf("ERROR: Couldn't create PIFO map: %s\n", strerror(-err));
@@ -191,9 +192,7 @@ static void usage(const char *prog)
 		"\nOPTS:\n"
 		"    -d    detach program\n"
 		"    -S    use skb-mode\n"
-		"    -F    force loading prog\n"
-		"    -D    direct table lookups (skip fib rules)\n"
-		"    -Q    direct table lookups (skip fib rules)\n",
+		"    -m    Add priority rule"
 		prog);
 }
 
@@ -205,11 +204,10 @@ int main(int argc, char **argv)
 	struct bpf_object *obj;
 	int opt, i, idx, err;
 	bool queue = false;
-	int queue_length = 1024;
 	int attach = 1;
 	int ret = 0;
 
-	while ((opt = getopt(argc, argv, ":dDQq:SF")) != -1) {
+	while ((opt = getopt(argc, argv, ":dDQSF")) != -1) {
 		switch (opt) {
 		case 'd':
 			attach = 0;
