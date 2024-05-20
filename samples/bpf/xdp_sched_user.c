@@ -30,55 +30,81 @@
 
 #include "xdq.h"
 
+struct xdp_config {
+	bool attach;
+	bool queue;
+	int queue_length;
+	bool has_flows;
+	bool has_priority_queue_length;
+	bool has_rb_tree;
+	char *name;
+};
+
+struct xdp_state {
+	int idx;
+	int redir_prog_fd;
+	int dequeue_prog_fd;
+	int redir_map_fd;
+	int pifos_map_fd;
+	int flows_map_fd;
+	int priority_queue_length_map_fd;
+};
+
 static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 const char *redir_prog_names[] = {
 	"xdp_fifo",
+	"xdp_fifo_rb",
 	"xdp_sprio",
+	"xdp_sprio_rb",
 	"xdp_wfq",
+	"xdp_wfq_rb",
 };
 
 const char *dequeue_prog_names[] = {
 	"xdp_dequeue"
 };
 
-static int do_attach(int idx, int redir_prog_fd, int dequeue_prog_fd,
-		     int redir_map_fd, int pifos_map_fd, int flows_map_fd,
-		     int priority_queue_length_map_fd, int queue_length, const char *name)
+static int do_attach(struct xdp_config *config, struct xdp_state *state, const char *name)
 {
 	int err;
 
-	if (pifos_map_fd > -1) {
+	if (state->pifos_map_fd > -1) {
 		LIBBPF_OPTS(bpf_map_create_opts, map_opts, .map_extra = 8388608);
 		char map_name[BPF_OBJ_NAME_LEN];
 		int pifo_fd;
 
-		snprintf(map_name, sizeof(map_name), "pifo_%d", idx);
+		snprintf(map_name, sizeof(map_name), "pifo_%d", state->idx);
 		map_name[BPF_OBJ_NAME_LEN-1] = '\0';
 
-		pifo_fd = bpf_map_create(BPF_MAP_TYPE_PIFO_XDP, map_name,
-					 sizeof(__u32), sizeof(__u32), queue_length, &map_opts);
+		int map_type = BPF_MAP_TYPE_PIFO_XDP;
+		if (config->has_rb_tree)
+			map_type = BPF_MAP_TYPE_PIFO_XDP_RB;
+
+		pifo_fd = bpf_map_create(map_type, map_name,
+					 sizeof(__u32), sizeof(__u32),
+					 config->queue_length, &map_opts);
 		if (pifo_fd < 0) {
 			err = -errno;
 			printf("ERROR: Couldn't create PIFO map: %s\n", strerror(-err));
 			return err;
 		}
 
-		err = bpf_map_update_elem(pifos_map_fd, &idx, &pifo_fd, 0);
+		err = bpf_map_update_elem(state->pifos_map_fd, &state->idx, &pifo_fd, 0);
 		if (err) {
 			printf("ERROR: failed adding PIFO map for device %s\n", name);
 			return err;
 		}
 	}
 
-	if (flows_map_fd > -1) {
+	if (state->flows_map_fd > -1) {
 		LIBBPF_OPTS(bpf_map_create_opts, map_opts);
 		char map_name[BPF_OBJ_NAME_LEN];
 		int flow_fd;
 
-		snprintf(map_name, sizeof(map_name), "flow_%d", idx);
+		snprintf(map_name, sizeof(map_name), "flow_%d", state->idx);
 		map_name[BPF_OBJ_NAME_LEN-1] = '\0';
 
 		flow_fd = bpf_map_create(BPF_MAP_TYPE_HASH, map_name,
@@ -91,19 +117,19 @@ static int do_attach(int idx, int redir_prog_fd, int dequeue_prog_fd,
 			return err;
 		}
 
-		err = bpf_map_update_elem(flows_map_fd, &idx, &flow_fd, 0);
+		err = bpf_map_update_elem(state->flows_map_fd, &state->idx, &flow_fd, 0);
 		if (err) {
 			printf("ERROR: failed adding flow map for device %s\n", name);
 			return err;
 		}
 	}
 
-	if (priority_queue_length_map_fd > -1) {
+	if (state->priority_queue_length_map_fd > -1) {
 		LIBBPF_OPTS(bpf_map_create_opts, map_opts);
 		char map_name[BPF_OBJ_NAME_LEN];
 		int priority_queue_length_fd;
 
-		snprintf(map_name, sizeof(map_name), "fqueue_length_%d", idx);
+		snprintf(map_name, sizeof(map_name), "fqueue_length_%d", state->idx);
 		map_name[BPF_OBJ_NAME_LEN-1] = '\0';
 
 		priority_queue_length_fd = bpf_map_create(BPF_MAP_TYPE_ARRAY, map_name,
@@ -116,17 +142,18 @@ static int do_attach(int idx, int redir_prog_fd, int dequeue_prog_fd,
 			return err;
 		}
 
-		err = bpf_map_update_elem(priority_queue_length_map_fd, &idx, &priority_queue_length_fd, 0);
+		err = bpf_map_update_elem(state->priority_queue_length_map_fd, &state->idx,
+					  &priority_queue_length_fd, 0);
 		if (err) {
 			printf("ERROR: failed adding queue length map for device %s\n", name);
 			return err;
 		}
 	}
 
-	if (dequeue_prog_fd > -1) {
+	if (state->dequeue_prog_fd > -1) {
 		LIBBPF_OPTS(bpf_xdp_attach_opts, prog_opts, .old_prog_fd = -1);
 
-		err = bpf_xdp_attach(idx, dequeue_prog_fd,
+		err = bpf_xdp_attach(state->idx, state->dequeue_prog_fd,
 				     (XDP_FLAGS_DEQUEUE_MODE | XDP_FLAGS_REPLACE),
 				     &prog_opts);
 		if (err < 0) {
@@ -135,14 +162,14 @@ static int do_attach(int idx, int redir_prog_fd, int dequeue_prog_fd,
 		}
 	}
 
-	err = bpf_xdp_attach(idx, redir_prog_fd, xdp_flags, NULL);
+	err = bpf_xdp_attach(state->idx, state->redir_prog_fd, xdp_flags, NULL);
 	if (err < 0) {
 		printf("ERROR: failed to attach redir program to %s\n", name);
 		return err;
 	}
 
 	/* Adding ifindex as a possible egress TX port */
-	err = bpf_map_update_elem(redir_map_fd, &idx, &idx, 0);
+	err = bpf_map_update_elem(state->redir_map_fd, &state->idx, &state->idx, 0);
 	if (err)
 		printf("ERROR: failed using device %s as TX-port\n", name);
 
@@ -182,7 +209,8 @@ static int do_detach(int ifindex, const char *ifname, const char *app_name)
 		return err;
 	}
 
-	curr_prog_id = xdp_flags & XDP_FLAGS_SKB_MODE ? query_opts.skb_prog_id : query_opts.drv_prog_id;
+	curr_prog_id = xdp_flags & XDP_FLAGS_SKB_MODE ? query_opts.skb_prog_id :
+		query_opts.drv_prog_id;
 	if (!curr_prog_id) {
 		printf("ERROR: flags(0x%x) xdp prog is not attached to %s\n",
 		       xdp_flags, ifname);
@@ -256,28 +284,36 @@ static void usage(const char *prog, FILE *out)
 
 int main(int argc, char **argv)
 {
-	int redir_prog_fd = -1;
-	int dequeue_prog_fd = -1;
-	int redir_map_fd = -1;
-	int pifos_map_fd = -1;
-	int flows_map_fd = -1;
-	int priority_queue_length_map_fd = -1;
+	struct xdp_config config = {
+		.attach = true,
+		.queue = false,
+		.queue_length = 1000,
+		.has_flows = false,
+		.has_priority_queue_length = false,
+		.has_rb_tree = false,
+		.name = NULL,
+	};
 
-	const char *prog_name = "xdp_fifo";
+	struct xdp_state state = {
+		.idx = -1,
+		.redir_prog_fd = -1,
+		.dequeue_prog_fd = -1,
+		.redir_map_fd = -1,
+		.pifos_map_fd = -1,
+		.flows_map_fd = -1,
+		.priority_queue_length_map_fd = -1,
+	};
+
 	char filename[PATH_MAX];
+	char *prog_name = "xdp_fifo";
 	struct bpf_object *obj;
-	int queue_length = 3000;
-	int opt, i, idx, err;
-	bool queue = false;
-	int attach = 1;
-	int has_flows = false;
-	int has_priority_queue_length = false;
+	int opt, err;
 	int ret = 0;
 
-	while ((opt = getopt(argc, argv, ":dDQSFWpwq:h")) != -1) {
+	while ((opt = getopt(argc, argv, ":dDQSFWpwq:bh")) != -1) {
 		switch (opt) {
 		case 'd':
-			attach = 0;
+			config.attach = false;
 			break;
 		case 'S':
 			xdp_flags |= XDP_FLAGS_SKB_MODE;
@@ -287,19 +323,19 @@ int main(int argc, char **argv)
 			break;
 		case 'Q':
 			prog_name = "xdp_fifo";
-			queue = true;
+			config.queue = true;
 			break;
 		case 'W':
 			prog_name = "xdp_wfq";;
-			has_flows = true;
-			has_priority_queue_length = true;
-			queue = true;
+			config.has_flows = true;
+			config.has_priority_queue_length = true;
+			config.queue = true;
 			break;
 		case 'p':
 			prog_name = "xdp_sprio";
-			has_flows = true;
-			has_priority_queue_length = true;
-			queue = true;
+			config.has_flows = true;
+			config.has_priority_queue_length = true;
+			config.queue = true;
 			break;
 		case 'w':
 			// TODO add support for weight rules
@@ -307,7 +343,10 @@ int main(int argc, char **argv)
 			return 1;
 		case 'q':
 			// TODO do proper error checking
-			queue_length = atoi(optarg);
+			config.queue_length = atoi(optarg);
+			break;
+		case 'b':
+			config.has_rb_tree = true;
 			break;
 		case 'h':
 			usage(basename(argv[0]), stdout);
@@ -326,8 +365,9 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if (attach) {
-		snprintf(filename, sizeof(filename), "%s_%s_kern.o", argv[0], prog_name);
+	if (config.attach) {
+		snprintf(filename, sizeof(filename), "%s_%s_%skern.o", argv[0], prog_name,
+			 config.has_rb_tree ? "rb_" : "");
 
 		if (access(filename, O_RDONLY) < 0) {
 			printf("error accessing file %s: %s\n",
@@ -348,71 +388,71 @@ int main(int argc, char **argv)
 			 */
 			return 1;
 		}
-		redir_prog_fd = bpf_program__fd(bpf_object__find_program_by_name(obj,
+		state.redir_prog_fd = bpf_program__fd(bpf_object__find_program_by_name(obj,
 									   prog_name));
-		if (redir_prog_fd < 0) {
-			printf("program not found: %s\n", strerror(redir_prog_fd));
+		if (state.redir_prog_fd < 0) {
+			printf("program not found: %s\n", strerror(state.redir_prog_fd));
 			return 1;
 		}
 
-		redir_map_fd = bpf_map__fd(bpf_object__find_map_by_name(obj,
+		state.redir_map_fd = bpf_map__fd(bpf_object__find_map_by_name(obj,
 									"xdp_tx_ports"));
-		if (redir_map_fd < 0) {
-			printf("map not found: %s\n", strerror(redir_map_fd));
+		if (state.redir_map_fd < 0) {
+			printf("map not found: %s\n", strerror(state.redir_map_fd));
 			return 1;
 		}
 
-		if (queue) {
-			dequeue_prog_fd = bpf_program__fd(
+		if (config.queue) {
+			state.dequeue_prog_fd = bpf_program__fd(
 				bpf_object__find_program_by_name(obj, "xdp_dequeue"));
-			if (dequeue_prog_fd < 0) {
-				printf("dequeue program not found: %s\n", strerror(dequeue_prog_fd));
+			if (state.dequeue_prog_fd < 0) {
+				printf("dequeue program not found: %s\n",
+				       strerror(state.dequeue_prog_fd));
 				return 1;
 			}
-			pifos_map_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "pifo_maps"));
-			if (pifos_map_fd < 0) {
-				printf("map not found: %s\n", strerror(-pifos_map_fd));
+			state.pifos_map_fd = bpf_map__fd(bpf_object__find_map_by_name(obj,
+										      "pifo_maps"));
+			if (state.pifos_map_fd < 0) {
+				printf("map not found: %s\n", strerror(-state.pifos_map_fd));
 				return 1;
 			}
 		}
 
-		if (has_flows) {
-			flows_map_fd = bpf_map__fd(
+		if (config.has_flows) {
+			state.flows_map_fd = bpf_map__fd(
 				bpf_object__find_map_by_name(obj, "flow_state_maps"));
-			if (flows_map_fd < 0) {
-				printf("map not found: %s\n", strerror(-flows_map_fd));
+			if (state.flows_map_fd < 0) {
+				printf("map not found: %s\n", strerror(-state.flows_map_fd));
 				return 1;
 			}
 		}
 
-		if (has_priority_queue_length) {
-			priority_queue_length_map_fd = bpf_map__fd(
+		if (config.has_priority_queue_length) {
+			state.priority_queue_length_map_fd = bpf_map__fd(
 				bpf_object__find_map_by_name(obj, "priority_queue_length_maps"));
-			if (priority_queue_length_map_fd < 0) {
-				printf("map not found: %s\n", strerror(-priority_queue_length_map_fd));
+			if (state.priority_queue_length_map_fd < 0) {
+				printf("map not found: %s\n",
+				       strerror(-state.priority_queue_length_map_fd));
 				return 1;
 			}
 		}
 	}
 
-	for (i = optind; i < argc; ++i) {
-		idx = if_nametoindex(argv[i]);
-		if (!idx)
-			idx = strtoul(argv[i], NULL, 0);
+	for (int i = optind; i < argc; ++i) {
+		state.idx = if_nametoindex(argv[i]);
+		if (!state.idx)
+			state.idx = strtoul(argv[i], NULL, 0);
 
-		if (!idx) {
+		if (!state.idx) {
 			fprintf(stderr, "Invalid arg\n");
 			return 1;
 		}
-		if (!attach) {
-			err = do_detach(idx, argv[i], argv[0]);
+		if (!config.attach) {
+			err = do_detach(state.idx, argv[i], argv[0]);
 			if (err)
 				ret = err;
 		} else {
-			err = do_attach(idx, redir_prog_fd, dequeue_prog_fd,
-					redir_map_fd, pifos_map_fd, flows_map_fd,
-					priority_queue_length_map_fd,
-					queue_length, argv[i]);
+			err = do_attach(&config, &state, argv[i]);
 			if (err)
 				ret = err;
 		}

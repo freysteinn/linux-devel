@@ -43,7 +43,7 @@ const char *dequeue_prog_names[] = {
 };
 
 static int do_attach(int idx, int redir_prog_fd, int dequeue_prog_fd,
-		     int redir_map_fd, int pifos_map_fd, const char *name)
+		     int redir_map_fd, int pifos_map_fd, int queue_length, const char *name)
 {
 	int err;
 
@@ -56,7 +56,7 @@ static int do_attach(int idx, int redir_prog_fd, int dequeue_prog_fd,
 		map_name[BPF_OBJ_NAME_LEN-1] = '\0';
 
 		pifo_fd = bpf_map_create(BPF_MAP_TYPE_PIFO_XDP, map_name,
-					 sizeof(__u32), sizeof(__u32), 1000, &map_opts);
+					 sizeof(__u32), sizeof(__u32), queue_length, &map_opts);
 		if (pifo_fd < 0) {
 			err = -errno;
 			printf("ERROR: Couldn't create PIFO map: %s\n", strerror(-err));
@@ -205,20 +205,14 @@ int main(int argc, char **argv)
 	struct bpf_object *obj;
 	int opt, i, idx, err;
 	bool queue = false;
-	int queue_length = 1024;
+	int queue_length = 1000;
 	int attach = 1;
 	int ret = 0;
 
-	while ((opt = getopt(argc, argv, ":dDQq:SF")) != -1) {
+	while ((opt = getopt(argc, argv, ":dDQq:bSF")) != -1) {
 		switch (opt) {
 		case 'd':
 			attach = 0;
-			break;
-		case 'S':
-			xdp_flags |= XDP_FLAGS_SKB_MODE;
-			break;
-		case 'F':
-			xdp_flags &= ~XDP_FLAGS_UPDATE_IF_NOEXIST;
 			break;
 		case 'D':
 			prog_name = "xdp_fwd_direct_prog";
@@ -226,6 +220,15 @@ int main(int argc, char **argv)
 		case 'Q':
 			prog_name = "xdp_fwd_queue";
 			queue = true;
+			break;
+		case 'q':
+			queue_length = atoi(optarg);
+			break;
+		case 'S':
+			xdp_flags |= XDP_FLAGS_SKB_MODE;
+			break;
+		case 'F':
+			xdp_flags &= ~XDP_FLAGS_UPDATE_IF_NOEXIST;
 			break;
 		default:
 			usage(basename(argv[0]));
@@ -306,7 +309,7 @@ int main(int argc, char **argv)
 				ret = err;
 		} else {
 			err = do_attach(idx, redir_prog_fd, dequeue_prog_fd,
-					redir_map_fd, pifos_map_fd, argv[i]);
+					redir_map_fd, pifos_map_fd, queue_length, argv[i]);
 			if (err)
 				ret = err;
 		}

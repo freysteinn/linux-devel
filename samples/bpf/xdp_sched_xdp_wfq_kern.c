@@ -305,17 +305,6 @@ static __always_inline int ip_decrease_ttl(struct iphdr *iph)
 __u16 default_weight = 256;
 __u32 max_priority_queue_length = 1000;
 
-__u32 nic4_packets = 0;
-__u32 nic6_packets = 0;
-
-__u32 nic4_queue0 = 0;
-__u32 nic4_queue1 = 0;
-__u32 nic4_queue2 = 0;
-
-__u32 nic6_queue0 = 0;
-__u32 nic6_queue1 = 0;
-__u32 nic6_queue2 = 0;
-
 __u32 cs0 = 0;
 __u32 cs1 = 1;
 __u32 cs2 = 2;
@@ -407,10 +396,10 @@ int xdp_wfq(struct xdp_md *ctx)
 		tos = p_info.iph->tos;
 		if (tos == 0x20) {
 			tos_idx = cs1;
-			flow->weight = default_weight;
+			flow->weight = default_weight >> 1;
 		} else if (tos == 0x40) {
 			tos_idx = cs2;
-			flow->weight = default_weight;
+			flow->weight = default_weight >> 2;
 		}
 
 		/* Update priority queue length */
@@ -420,10 +409,6 @@ int xdp_wfq(struct xdp_md *ctx)
 		if ((*priority_queue_length + 1) > max_priority_queue_length)
 			return XDP_DROP;
 		*priority_queue_length += 1;
-		if (fib_params.ifindex == 4)
-			nic4_packets++;
-		else if (fib_params.ifindex == 6)
-			nic6_packets++;
 
 		/* Calculate PIFO priority */
 		start_time_bytes = bpf_max(*time_bytes, flow->finish_bytes);
@@ -500,11 +485,6 @@ void *xdp_dequeue(struct dequeue_ctx *ctx)
 	if (!priority_queue_length)
 		goto err;
 	*priority_queue_length -= 1;
-
-	if (ifindex == 4)
-		nic4_packets--;
-	else if (ifindex == 6)
-		nic6_packets--;
 
 	/* Update flow state */
 	nt = p_info.nt;
