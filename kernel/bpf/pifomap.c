@@ -411,8 +411,8 @@ static unsigned long pifo_find_first_bucket(struct bpf_pifo_queue *queue)
 	return offset;
 }
 
-static union bpf_pifo_item *__pifo_map_dequeue(struct bpf_pifo_map *pifo,
-					       u64 flags, u64 *rank, bool xdp)
+static __always_inline union bpf_pifo_item *__pifo_map_dequeue(struct bpf_pifo_map *pifo,
+							       u64 flags, u64 *rank, bool xdp)
 {
 	struct bpf_pifo_queue *queue = pifo->q_primary;
 	struct bpf_pifo_bucket *bucket;
@@ -431,7 +431,7 @@ static union bpf_pifo_item *__pifo_map_dequeue(struct bpf_pifo_map *pifo,
 		return NULL;
 	}
 
-	if (unlikely(pifo_queue_is_empty(queue))) {
+	if (unlikely(pifo_queue_is_empty(queue) && !pifo_queue_is_empty(pifo->q_secondary))) {
 		swap(pifo->q_primary, pifo->q_secondary);
 		pifo->q_secondary->min_rank = pifo->q_primary->min_rank + pifo->q_primary->range;
 		queue = pifo->q_primary;
@@ -443,13 +443,14 @@ static union bpf_pifo_item *__pifo_map_dequeue(struct bpf_pifo_map *pifo,
 		return NULL;
 	}
 	bucket = &queue->buckets[bucket_idx];
+	item = bucket->head;
+	prefetchw(item);
 
 	if (WARN_ON_ONCE(!bucket->tail)) {
 		*rank = -EFAULT;
 		return NULL;
 	}
 
-	item = bucket->head;
 	if (xdp)
 		bucket->head = (union bpf_pifo_item *)item->frame.next;
 	else
