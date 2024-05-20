@@ -352,8 +352,8 @@ static int __pifo_map_enqueue(struct bpf_pifo_map *pifo, union bpf_pifo_item *it
 	if (unlikely(pifo_map_is_full(pifo)))
 		return -EOVERFLOW;
 
-	if (rank < queue->min_rank)
-		return -ERANGE;
+	/* If we underflow, set the rank to min_rank */
+	rank = rank < queue->min_rank ? queue->min_rank : rank;
 
 	pifo_item_set_next(item, NULL, xdp);
 
