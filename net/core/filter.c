@@ -9998,9 +9998,9 @@ dequeue_convert_xdp_md_access(enum bpf_access_type type,
 		*insn++ = BPF_LDX_MEM(BPF_B, /* metasize == 8 bits */
 				      src_reg, src_reg,
 #if defined(__LITTLE_ENDIAN_BITFIELD)
-				      offsetofend(struct xdp_frame, headroom) + 3);
-#elif defined(__BIG_ENDIAN_BITFIELD)
 				      offsetofend(struct xdp_frame, headroom));
+#elif defined(__BIG_ENDIAN_BITFIELD)
+				      offsetofend(struct xdp_frame, headroom) + 3);
 #endif
 		*insn++ = BPF_ALU64_REG(BPF_SUB, si->dst_reg, src_reg);
 		*insn++ = BPF_MOV64_REG(src_reg, BPF_REG_AX);
