@@ -180,6 +180,7 @@ always-y += xdp_sched_xdp_fifo_kern.o
 always-y += xdp_sched_xdp_fifo_rb_kern.o
 always-y += xdp_sched_xdp_sprio_kern.o
 always-y += xdp_sched_xdp_wfq_kern.o
+always-y += xdp_sched_xdp_fq_codel_kern.o
 always-y += task_fd_query_kern.o
 always-y += xdp_sample_pkts_kern.o
 always-y += ibumad_kern.o
